@@ -21,7 +21,7 @@ catalog:
   nanoid: 6.0.2
   playwright-core: 1.64.1
   typescript: 6.0.3
-  wrangler: 4.155.0
+  wrangler: 4.156.1
   zod: 4.6.7
   vite: npm:@voidzero-dev/vite-plus-core@1.4.0
   vitest: 5.0.5
@@ -52,3 +52,5 @@ allowBuilds:
 
 minimumReleaseAgeExclude:
   - "@cloudflare/workers-types@5.20260808.1"
+  - miniflare@5.20261101.0-beta
+  - wrangler@4.156.1

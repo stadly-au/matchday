@@ -1,0 +1,166 @@
+name: Deploy Preview
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: deploy-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    name: Deploy preview
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    # Fork PRs get no secrets, so they cannot create a branch or deploy.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Shared with CI's integration job, which migrates the same Neon branch.
+    concurrency:
+      group: neon-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1.22.0
+
+      - name: Install dependencies
+        run: vp install --frozen-lockfile
+
+      # The action reuses the branch CI already created for this PR. Migrations below apply this
+      # PR's schema to it, so the preview and the integration tests read one database.
+      - name: Create Neon branch
+        id: neon
+        uses: neondatabase/create-branch-action@v6
+        with:
+          project_id: ${{ vars.NEON_PROJECT_ID }}
+          api_key: ${{ secrets.NEON_API_KEY }}
+          branch_name: pr-${{ github.event.pull_request.number }}
+          parent_branch: production
+          database: matchday
+
+      - name: Apply migrations
+        run: vp run --filter @matchday/db db:migrate
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url_pooled }}
+
+      - name: Compute preview name
+        id: meta
+        env:
+          BRANCH_NAME: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Keep in sync with cleanup-branch.yml: both must derive the same name.
+          branch_slug=$(printf '%s' "$BRANCH_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-+/-/g')
+          branch_slug="${branch_slug:0:24}"
+          echo "preview_name=pr-${PR_NUMBER}-${branch_slug}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Wrangler writes one JSON entry per command here, including the URL.
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/wrangler-preview.jsonl
+          PREVIEW_NAME: ${{ steps.meta.outputs.preview_name }}
+        run: |
+          vp -C apps/api exec wrangler preview --name "$PREVIEW_NAME"
+
+      - name: Read preview URL
+        id: url
+        run: |
+          preview_url=$(jq -r 'select(.type == "preview") | .preview_urls[0] // empty' \
+            "${{ runner.temp }}/wrangler-preview.jsonl" | tail -1)
+          : "${preview_url:?Wrangler reported no Preview URL. Run the production deploy once with preview_urls enabled.}"
+          echo "deploy_url=$preview_url" >> "$GITHUB_OUTPUT"
+
+      # Piped, never written to disk. Not wrangler-action's `secrets:` input either: it never
+      # passes --name, so it would write these to the production Worker. SENTRY_DSN is included so
+      # preview errors land in Sentry under the "preview" environment.
+      - name: Upload preview secrets
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.db_url_pooled }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_NAME: ${{ steps.meta.outputs.preview_name }}
+        run: |
+          jq -n '{
+            DATABASE_URL: env.DATABASE_URL,
+            SENTRY_DSN: env.SENTRY_DSN
+          }' \
+            | vp -C apps/api exec wrangler preview secret bulk --name "$PREVIEW_NAME"
+
+      # /health pings the database, so a 200 proves the branch's URL reached the Worker too.
+      - name: Smoke test
+        env:
+          PREVIEW_URL: ${{ steps.url.outputs.deploy_url }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            body=$(curl -fsS --max-time 10 "$PREVIEW_URL/health" || true)
+            if [ "$(printf '%s' "$body" | jq -r '.status // empty')" = "ok" ]; then
+              echo "Preview reports ok."
+              exit 0
+            fi
+            echo "Attempt ${attempt}: preview not ready yet."
+            sleep 5
+          done
+          echo "::error::Preview /health did not report ok."
+          exit 1
+
+      - name: Comment preview URL
+        uses: actions/github-script@v9
+        env:
+          PREVIEW_URL: ${{ steps.url.outputs.deploy_url }}
+          PREVIEW_NAME: ${{ steps.meta.outputs.preview_name }}
+        with:
+          script: |
+            const marker = '<!-- preview-url -->'
+            const previewUrl = process.env.PREVIEW_URL
+            const previewName = process.env.PREVIEW_NAME
+
+            const body = [
+              marker,
+              `Preview deployment is ready: ${previewUrl}`,
+              `Preview: \`${previewName}\``,
+            ].join('\n\n')
+
+            const { owner, repo } = context.repo
+            const issue_number = context.issue.number
+
+            const comments = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            })
+
+            const existing = comments.data.find(
+              (comment) => comment.user.type === 'Bot' && comment.body.includes(marker),
+            )
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              })
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number,
+                body,
+              })
+            }

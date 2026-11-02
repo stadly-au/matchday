@@ -13,9 +13,9 @@ const apiEnvSchema = z.object({
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   // Sentry DSN (optional — Sentry no-ops when unset, so local dev doesn't need an account).
   SENTRY_DSN: z.string().optional(),
-  // Sentry environment tag. wrangler.jsonc commits "production"; override to "development" in
-  // the root `.env` so dev traffic doesn't get tagged as production in Sentry.
-  ENVIRONMENT: z.enum(["development", "production"]).default("development"),
+  // Sentry environment tag. wrangler.jsonc commits "production" and "preview" for Worker Previews;
+  // override to "development" in the root `.env` so dev traffic isn't tagged as production.
+  ENVIRONMENT: z.enum(["development", "preview", "production"]).default("development"),
 });
 
 export type ApiConfig = z.infer<typeof apiEnvSchema>;
