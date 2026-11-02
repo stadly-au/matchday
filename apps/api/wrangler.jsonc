@@ -15,6 +15,15 @@
   },
   // Sentry source map upload on `wrangler deploy` (requires SENTRY_AUTH_TOKEN/ORG/PROJECT env).
   "upload_source_maps": true,
+  // A Preview gets a workers.dev URL only with this on; it defaults to off.
+  "preview_urls": true,
+  // A Preview reads this level and inherits no vars or bindings from the top level.
+  "previews": {
+    "vars": {
+      "LOG_LEVEL": "info",
+      "ENVIRONMENT": "preview",
+    },
+  },
   // Non-secret config. DATABASE_URL and SENTRY_DSN are set as Worker secrets (deploy.yml), never
   // committed here. Override locally in the gitignored root .env (e.g. ENVIRONMENT=development) —
   // wrangler dev reads these vars too.

@@ -51,6 +51,10 @@ jobs:
     timeout-minutes: 10
     # Fork PRs get no secrets, so they cannot create a branch.
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    # The preview deploy migrates this same branch, and drizzle-kit takes no lock of its own.
+    concurrency:
+      group: neon-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@v7
