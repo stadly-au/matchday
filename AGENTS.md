@@ -10,6 +10,10 @@ In any discussion, add humour and funny memes to lighten the mood.
 Always be succinct, never repeat yourself and keep it brief please.
 Use dot points where possible.
 
+**Start everything an agent writes on GitHub with the 🤖 emoji** — issue and PR titles and bodies,
+and every comment or review reply. The reader can then tell agent text from human text at a glance.
+In a multi-paragraph body, start each paragraph or section heading with it.
+
 **Always respond in plain language, per ISO 24495-1:2023.** Every reply must let the reader find
 what they need, understand it, and use it — first time through. In practice:
 
